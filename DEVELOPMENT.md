@@ -17,9 +17,30 @@
 ワークフロー:
 
 ```
-Go を書く  →  goose で .v に翻訳  →  proofgen で証明スケルトン生成
+Go を書く  →  perennial-cli goose で .v に翻訳(goose+proofgen)
           →  Iris/Perennial で正しさを証明  →  make でコンパイル & 証明チェック
 ```
+
+## 普通のフロー（これが標準）
+
+```fish
+# --- セットアップ(初回のみ) ---
+# (1) goose/proofgen を go tool として登録(init が本来やる分)
+go get -tool github.com/goose-lang/goose/cmd/goose@latest \
+             github.com/goose-lang/goose/cmd/proofgen@latest
+# (2) Perennial 本体を opam に入れる(make が New.* / Perennial.* を解決するため)
+opam install perennial          # tmp.opam の pin コミットが user-contrib に入る
+
+# --- 毎回 ---
+# Go を書く(go_path = "." 配下のパッケージ)
+go tool perennial-cli goose     # CLI が goose と proofgen を実行
+                                #   → src/code/...(翻訳モデル), src/generatedproof/...(証明スケルトン)
+make                            # rocq dep → .v を .vo にコンパイル(=型検査+証明チェック)
+```
+
+`make` が `EXIT=0` なら、生成コードの型検査と、proofgen が出した Iris 証明
+（`Qed.`）まで全て通った＝**検証成功**。`perennial-cli` と `Makefile` を使う意味は
+まさにここ: ツール版が go.mod で固定され、誰がチェックアウトしても同じ手順で回る。
 
 ## ディレクトリ / ファイル構成
 
@@ -34,44 +55,65 @@ Go を書く  →  goose で .v に翻訳  →  proofgen で証明スケルト�
 
 > `src/code/**/*.v` と `src/generatedproof/` は **生成物**で `.gitignore` 済み。
 
-## 環境の前提（このマシン固有のハマりどころ）
+## このマシンで標準フローが詰まった2つの落とし穴
 
-1. **goose の入手先**: 旧 `goose-lang/goose` は 2026-04 に archive され
-   （凍結版 v0.10.0）、開発は Perennial 本体に移動した。ローカルに
-   `~/ghq/github.com/mit-pdos/perennial`（HEAD `f884a505` = `tmp.opam` の pin と
-   一致）があり、その中の `goose/cmd/goose` と `goose/cmd/proofgen` を使う。
-2. **Go ツールチェーン**: システムの go は 1.25.10 だが、perennial の `go.work` は
-   `go 1.26` を要求する。`GOTOOLCHAIN=go1.26.0` を前置すると go が 1.26 を自動DL
-   して使う（DL 済み: `~/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.0...`）。
-3. **サンドボックス**: go のビルド/実行は `~/.cache/go-build` と `~/go/pkg/mod` への
-   書き込みが要る。サンドボックス下では read-only になり失敗するので、これらは
-   サンドボックス無効で実行する。
+上の「普通のフロー」をこの環境でそのまま実行すると2箇所で止まった。原因と回避を
+記録する（どちらも本質は **セットアップ未完**であって、フローは壊れていない）。
 
-## 手順（検証済み）
+### 落とし穴1: goose のバージョンが pin と合わない
 
-### 1. goose / proofgen をビルド
+`go get -tool goose@latest` が引くのは、archive 済み `goose-lang/goose` の
+**凍結版 v0.10.0**。一方 `tmp.opam` が pin する Perennial は `f884a505`。両者は
+非互換で、v0.10.0 が生成した `.v` は新しい `New.golang` 理論とずれて
+`Cannot infer ... GoGlobalContext`（type class instance not found）でコンパイル不能。
+さらに v0.10.0 のバイナリは go1.26 と非互換で `unknown GOEXPERIMENT synchashtriemap`
+で panic する。
+
+**回避**: goose 開発は Perennial 本体に移動済み（archive 通知）。ローカルに
+`~/ghq/github.com/mit-pdos/perennial`（HEAD `f884a505` = pin と一致）があるので、
+CLI の `--local` でその同梱 goose を使い、pin と同一バージョンで翻訳する:
 
 ```fish
 set P ~/ghq/github.com/mit-pdos/perennial
-cd $P; and GOTOOLCHAIN=go1.26.0 go build -o $TMPDIR/goose    ./goose/cmd/goose
-cd $P; and GOTOOLCHAIN=go1.26.0 go build -o $TMPDIR/proofgen ./goose/cmd/proofgen
+GOTOOLCHAIN=go1.26.0 go tool perennial-cli goose --local $P/goose
 ```
 
-### 2. Go → Rocq 翻訳
+> `--local` は `$P/goose/cmd/{goose,proofgen}` をその場でビルドして実行する。
+> このビルドには go1.26 が要る（システムは 1.25.10、`$P/go.work` が go 1.26 要求）。
+> `GOTOOLCHAIN=go1.26.0` を前置すれば go が 1.26 を自動DLして使う。
+> 翻訳された `.v` 自体のコンパイル（make 側）は 1.25.10 のままで問題ない。
 
-```fish
-cd ~/tmp/tmp
-$TMPDIR/goose    -out src/code           -dir . ./...
-$TMPDIR/proofgen -out src/generatedproof -dir . ./...   # .v.toml がある場合は -configdir src/code を付ける
+### 落とし穴2: Perennial が opam install されていない
+
+`make` は `New.proof.proof_prelude` など `New.*` / `Perennial.*` を require するが、
+このマシンの Perennial は in-tree ビルドのみで **opam 未インストール**（user-contrib に
+無い）。そのため `rocq dep` が
+`library New.proof.proof_prelude ... not found in the loadpath` で落ちる。
+
+**本来の回避**: `opam install perennial`（pin コミットを user-contrib に入れる）。
+これで `make` が無改変で一発で通る。
+
+**今回の暫定回避**: `_RocqProject` に in-tree perennial を一時的に足して `make` を
+完走させた（push 前に戻す）:
+
+```
+-Q /abs/path/to/perennial/new New
+-Q /abs/path/to/perennial/src Perennial
 ```
 
-`example/example.go` から `src/code/github_com/iasakura/perennial_sandbox/example.v`
-が生成される（1 パッケージ → 1 ファイル、先頭は `From New.golang Require Import defn.`）。
+> 注意: in-tree を `-Q` で直接指すと、`make` が Perennial 側の `.v` まで「ビルド対象」と
+> みなして再コンパイルし、既存 `.vo` と矛盾（`inconsistent assumptions`）を起こすこと
+> がある。特に `_RocqProject` を編集するとその mtime が全 `.vo` の依存に効き、Perennial
+> の `.vo` を巻き込んで再ビルドしてしまう。`opam install` ならライブラリ扱いになり、この
+> 問題は起きない。暫定回避を使うなら `_RocqProject` の mtime を Perennial の `.vo` より
+> 古くしておく（`touch -d <古い日付> _RocqProject`）。
 
-> 備考: 本来は `go tool perennial-cli goose` 一発で上記2つを呼ぶ設計だが、
-> このプロジェクトの go.mod には goose/proofgen が tool 登録されておらず
-> （`init` 時の `go get` が未完了）、かつ v0.4.4 経由だと go1.26 の壁に当たるため、
-> ここでは goose を直接叩いている。
+## サンドボックスについて
+
+go のビルド/実行や rocq compile（go ツールチェーン経由）は `~/.cache/go-build` と
+`~/go/pkg/mod` への書き込みが要る。サンドボックス下では read-only で失敗するので、
+これらはサンドボックス無効で実行する。ファイル読み書き（`src/` や `$TMPDIR`）だけの
+操作はサンドボックスのままでよい。
 
 ## 翻訳結果の読み方
 
@@ -93,12 +135,32 @@ $TMPDIR/proofgen -out src/generatedproof -dir . ./...   # .v.toml がある場�
 - 末尾の `Assumptions` クラス（`Add_unfold`, `SumTo_unfold` …）が、**証明を書くときの
   接続点**になる。
 
-## まだやっていないこと / 次の選択肢
+## 証明チェック（検証済み）
 
-- **proofgen のスケルトン**: `src/generatedproof` の生成は未実施（証明の出発点）。
-- **`make` でのコンパイル**: 生成された `.v` は `From New.golang Require Import defn`
-  に依存するため、`_RocqProject` の `-Q src New` だけでは足りない。Perennial の `New`
-  をロードパスに載せる必要がある。いずれか:
-  - `opam install perennial`（pin コミットを user-contrib にインストール）、または
-  - `_RocqProject` に `-Q ~/ghq/github.com/mit-pdos/perennial/new New`（＋依存）を追加。
-  現状 Perennial は in-tree ビルドのみで opam 未インストール。
+上記の落とし穴を回避した状態で `make` を実行すると、`src/` 配下の `.v` が `.vo` に
+コンパイルされる。型検査に加え、proofgen が出した Iris 証明（`Qed.`）まで検査される
+ので、これが「証明チェック」になる。実際にこの環境で完走した:
+
+```
+$ make                                  # MAKE_EXIT=0
+ROCQ compile src/code/.../example.v
+ROCQ compile src/generatedproof/.../example.v
+$ find src -name '*.vo'
+src/code/github_com/iasakura/perennial_sandbox/example.vo
+src/generatedproof/github_com/iasakura/perennial_sandbox/example.vo
+```
+
+proofgen が生成した `Counter` の Iris points-to 述語やフィールドアクセス補題
+（`solve_typed_pointsto_agree` / `solve_into_val_typed_struct` /
+`solve_pointsto_access_struct`）が `Qed.` で閉じている＝**検証成功**。
+
+### ロードパスの考え方（なぜ make が New.* を解決できるか）
+
+生成コードは `New.golang.*` / `New.proof.*` / `New.code.*` を require する。`make` が
+これらを見つけられるのは、Perennial の `new/`（論理名 `New`）と `src/`（論理名
+`Perennial`）がロードパスにあるから。本来は `opam install perennial` で user-contrib に
+入る。今回の暫定回避では `_RocqProject` に下記を足して同じ `New` 名前空間に重ねた:
+
+- `-Q src New`              … 自分の `src/code/...` → `New.code.*`、`src/generatedproof/...` → `New.generatedproof.*`
+- `-Q <perennial>/new New`   … `New.golang.*`, `New.proof.*`, `New.theory.*` など
+- `-Q <perennial>/src Perennial` … `Perennial.*`（間接依存）
