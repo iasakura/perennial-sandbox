@@ -65,10 +65,25 @@ Proof.
     iApply "HΦ". iPureIntro.
     (* i = n from Hle and ¬(i<n). *)
     assert (uint.Z i = uint.Z n) as Hi_eq by lia.
-    rewrite -Hi_eq.
-    (* Goal: total = (i*(i-1))/2. Rewrite numerator using Hsum, then /2. *)
-    rewrite -Hsum.
-    rewrite Z.mul_comm Z.div_mul //.
+    word.
+Qed.
+
+(* StoreLoad roundtrips a value through Go's built-in map, which goose models
+   as a Rocq `gmap`. We prove the obvious functional spec: it returns v. The
+   intermediate map state (∅ then <[k:=v]>∅) lives entirely on the logical
+   gmap side, with own_map (`↦$`) tracking ownership. *)
+Lemma wp_StoreLoad (k v : w64) :
+  {{{ is_pkg_init example }}}
+    @! example.StoreLoad #k #v
+  {{{ RET #v; True }}}.
+Proof.
+  wp_start.
+  wp_auto.
+  wp_apply wp_map_make1 as "%mref Hm".
+  wp_apply (wp_map_insert with "Hm") as "Hm".
+  wp_apply (wp_map_lookup1 with "Hm") as "Hm".
+  rewrite lookup_insert_eq /=.
+  by iApply "HΦ".
 Qed.
 
 End proof.
