@@ -35,3 +35,12 @@ func SumTo(n uint64) uint64 {
 	}
 	return total
 }
+
+// StoreLoad makes a fresh map, stores v at key k, and reads it back.
+// It should always return v — a roundtrip through Go's built-in map, which
+// goose models as a Rocq `gmap`.
+func StoreLoad(k uint64, v uint64) uint64 {
+	m := make(map[uint64]uint64)
+	m[k] = v
+	return m[k]
+}

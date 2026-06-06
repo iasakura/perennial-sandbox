@@ -17,6 +17,8 @@ Definition Add {ext : ffi_syntax} {go_gctx : GoGlobalContext} : go_string := "gi
 
 Definition SumTo {ext : ffi_syntax} {go_gctx : GoGlobalContext} : go_string := "github.com/iasakura/perennial-sandbox/example.SumTo"%go.
 
+Definition StoreLoad {ext : ffi_syntax} {go_gctx : GoGlobalContext} : go_string := "github.com/iasakura/perennial-sandbox/example.StoreLoad"%go.
+
 (* Add returns the sum of two machine integers.
 
    go: example.go:9:6 *)
@@ -62,6 +64,22 @@ Definition SumToⁱᵐᵖˡ {ext : ffi_syntax} {go_gctx : GoGlobalContext} : val
       let: "$r0" := ((![go.uint64] "i") +⟨go.uint64⟩ #(W64 1)) in
       do:  ("i" <-[go.uint64] "$r0"));;;
     return: (![go.uint64] "total")).
+
+(* StoreLoad makes a fresh map, stores v at key k, and reads it back.
+   It should always return v — a roundtrip through Go's built-in map, which
+   goose models as a Rocq `gmap`.
+
+   go: example.go:42:6 *)
+Definition StoreLoadⁱᵐᵖˡ {ext : ffi_syntax} {go_gctx : GoGlobalContext} : val :=
+  λ: "k" "v",
+    exception_do (let: "v" := (GoAlloc go.uint64 "v") in
+    let: "k" := (GoAlloc go.uint64 "k") in
+    let: "m" := (GoAlloc (go.MapType go.uint64 go.uint64) (GoZeroVal (go.MapType go.uint64 go.uint64) #())) in
+    let: "$r0" := ((FuncResolve go.make1 [go.MapType go.uint64 go.uint64] #()) #()) in
+    do:  ("m" <-[go.MapType go.uint64 go.uint64] "$r0");;;
+    let: "$r0" := (![go.uint64] "v") in
+    do:  (map.insert go.uint64 (![go.MapType go.uint64 go.uint64] "m") (![go.uint64] "k") "$r0");;;
+    return: (map.lookup1 go.uint64 go.uint64 (![go.MapType go.uint64 go.uint64] "m") (![go.uint64] "k"))).
 
 #[global] Instance info' : PkgInfo pkg_id.example :=
 {|
@@ -112,5 +130,6 @@ Class Assumptions {ext : ffi_syntax} `{!GoGlobalContext} `{!GoLocalContext} `{!G
   #[global] Counter_instance :: Counter_Assumptions;
   #[global] Add_unfold :: FuncUnfold Add [] (Addⁱᵐᵖˡ);
   #[global] SumTo_unfold :: FuncUnfold SumTo [] (SumToⁱᵐᵖˡ);
+  #[global] StoreLoad_unfold :: FuncUnfold StoreLoad [] (StoreLoadⁱᵐᵖˡ);
 }.
 End example.
