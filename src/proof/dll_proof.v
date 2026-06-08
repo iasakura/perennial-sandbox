@@ -21,21 +21,29 @@ Set Default Proof Using "W".
 #[global] Instance : GetIsPkgInitWf (iProp Σ) dll := build_get_is_pkg_init_wf.
 
 (* l points to a dlist node whose prev pointer is p and the last next pointer is n *)
-Fixpoint is_dlist_node (l :  loc) (p : loc) (last : loc) (xs : list w64) : iProp Σ :=
+Fixpoint is_dlist_node (l last prev next : loc) (xs : list w64) : iProp Σ :=
   match xs with
-  | [] => ⌜l = last⌝
+  (* for ensuring that traversal is immediately finished when xs = [] *)
+  | [] => ⌜l = next ∧ last = prev⌝
+  (* | [x] =>
+    "Hl" ∷ ⌜l = last⌝ ∗
+    "Hnext" ∷ l.[dll.Node.t, "next"] ↦ next ∗
+    "Hprev" ∷ l.[dll.Node.t, "prev"] ↦ prev ∗
+    "Hx" ∷ l.[dll.Node.t, "x"] ↦ x *)
   | v :: xs =>
     ∃ (n : loc),
-      "Hl" ∷ ⌜l ≠ null ⌝ ∗
+      "Hl" ∷ ⌜l ≠ null⌝ ∗
+      "Hval" ∷ l.[dll.Node.t, "val"] ↦ v ∗
       "Hnext" ∷ l.[dll.Node.t, "next"] ↦ n ∗
-      "Hprev" ∷ l.[dll.Node.t, "prev"] ↦ p ∗
-      "His_dlist" ∷ is_dlist_node n l last xs
+      "Hprev" ∷ l.[dll.Node.t, "prev"] ↦ prev ∗
+      "His_dlist" ∷ is_dlist_node n last l next xs ∗
+      "Hx" ∷ l.[dll.Node.t, "x"] ↦ v
   end.
 
 Definition own_list (l : loc) (xs : list w64) : iProp Σ :=
   ∃ (hd tl : loc),
     "Hhead" ∷ l.[dll.List.t, "head"] ↦ hd ∗
-    "His_dlist" ∷ is_dlist_node hd null null xs ∗
+    "His_dlist" ∷ is_dlist_node hd tl null null xs ∗
     "Htail" ∷ l.[dll.List.t, "tail"] ↦ tl ∗
     "Hsize" ∷ l.[dll.List.t, "size"] ↦ (W64 (length xs)).
 
@@ -59,13 +67,135 @@ Fixpoint Sorted (xs : list w64) :=
     end
   end.
 
-(* TODO: postcond should  intuitively denote xs = ys ++ y ++ z ++ zs and y < v < z with some side conditions for when they may be null*)
-Lemma t (l p last : loc) (v : w64) (xs : list w64):
-  {{{ is_pkg_init dll ∗ is_dlist_node l p last xs ∗ ⌜Sorted xs⌝ }}}
-    l @! (go.PointerType dll.Node) @! "findLeastGreaterNode" (# v)
-  {{{ prev node, RET #(prev, node); emp }}}.
+Lemma is_dlist_node_app fst last prev next xs ys :
+  is_dlist_node fst last prev next (xs ++ ys)
+  ⊣⊢
+  ∃ mid_last mid_fst,
+    is_dlist_node fst mid_last prev mid_fst xs ∗ is_dlist_node mid_fst last mid_last next ys.
 Proof.
-Abort.
+  revert fst prev.
+  elim xs => [|x xs'].
+  - move => fst prev.
+    simpl.
+    iSplit.
+    + iIntros "H".
+      iExists prev, fst.
+      by iFrame.
+    + iIntros  "(%mid_last & %mid_fst & [-> ->] & Hlst)".
+      by iFrame.
+  - move => IH fst prev.
+    iSplit.
+    + simpl.
+      iIntros "[%n H]".
+      iNamed "H".
+      iPoseProof (IH n fst) as "H".
+      iApply "H" in "His_dlist".
+      iDestruct "His_dlist" as "(%mid_last & %mid_fst & Hfst & Hlst)".
+      iExists mid_last, mid_fst.
+      iFrameNamed.
+      iSplitR "Hlst"; [|by done].
+      iExists n.
+      by iFrameNamed.
+    + simpl.
+      iIntros "(%mid_last & %mid_fst & (%n & Hfst) & Hlst)".
+      iNamed "Hfst".
+      iExists n.
+      iFrameNamed.
+      iApply IH.
+      iExists mid_last, mid_fst.
+      by iFrame.
+Qed.
+
+Lemma is_dlist_node_null_nil last prev next xs :
+  is_dlist_node null last prev next xs -∗ ⌜xs = []⌝.
+Proof.
+  iIntros "H".
+  case xs => [|x xs'].
+  - by auto.
+  - simpl.
+    iDestruct "H" as "(%n & H)".
+    iNamed "H".
+    by iDestruct "Hl" as "%Hl".
+Qed.
+
+Lemma is_dlist_node_not_null_cons fst last prev xs :
+  fst ≠ null ->
+  is_dlist_node fst last prev null xs -∗
+  ∃x xs', ⌜xs = x :: xs'⌝.
+Proof.
+  move => H.
+  iIntros "H".
+  case xs => [|x xs'].
+  - simpl.
+    by iDestruct "H" as "[-> ->]".
+  - by iExists x, xs'.
+Qed.
+
+(* TODO: postcond should  intuitively denote xs = ys ++ y ++ z ++ zs and y < v < z with some side conditions for when they may be null*)
+Lemma t (l last : loc) (v : w64) (xs : list w64):
+  {{{ is_pkg_init dll ∗ is_dlist_node l last null null xs ∗ ⌜Sorted xs⌝ }}}
+    l @! (go.PointerType dll.Node) @! "findLeastGreaterNode" (# v)
+  {{{ prev node, RET (#prev, #node); ∃ ys zs,
+        ⌜xs = ys ++ zs ∧ Sorted(ys ++ v :: zs)⌝ ∗
+        is_dlist_node l prev null node ys ∗
+        is_dlist_node node last prev null zs }}}.
+Proof.
+  wp_start as "[His_dlist HSorted]".
+  wp_auto.
+  iAssert (∃ ys zs (cur p : loc),
+    ⌜xs = ys ++ zs ∧ ∀y, y ∈ ys -> uint.Z y ≤ uint.Z v⌝ ∗
+    cur_ptr ↦ cur ∗ p_ptr ↦ p ∗
+    is_dlist_node l p null cur ys ∗
+    is_dlist_node cur last p null zs
+  )%I with "[His_dlist p cur]" as "IH".
+  {
+    iExists [], xs, l, null.
+    iFrame.
+    iPureIntro.
+    split.
+    - split; first by done.
+      move => y Hy.
+      rewrite elem_of_nil in Hy.
+      done.
+    - by done.
+  }
+  wp_for.
+  iDestruct "IH" as "(%ys & %zs & %cur & %p & [-> %Hyv] & Hcur & Hp & Hdlist_ys & Hdlist_zs)".
+  wp_auto.
+  (* rewrite -bool_decide_not. *)
+  wp_if_destruct.
+  - iApply "HΦ".
+    iExists ys, zs.
+    iAssert (⌜zs = []⌝)%I as "->".
+    {
+      by iApply is_dlist_node_null_nil in "Hdlist_zs".
+    }
+    iFrame.
+    admit.
+  - case zs => [|z zs'].
+    + simpl.
+      by iDestruct "Hdlist_zs" as "[-> ->]".
+    + simpl.
+      iDestruct "Hdlist_zs" as "(%n' & H)". iNamed "H".
+      wp_auto.
+      wp_if_destruct.
+      * wp_for_post.
+        iFrameNamed.
+        iExists (ys ++ [z]), zs', n', cur.
+        iSplitR.
+        -- iPureIntro.
+           split.
+           ++ by rewrite -app_assoc.
+           ++ intros y Hy.
+              rewrite elem_of_app in Hy.
+              case Hy => [Hy' | Hy'].
+              ** by apply Hyv.
+              ** admit.
+        -- iFrame.
+           admit.
+      * iApply "HΦ".
+        admit.
+Admitted.
 
 Theorem insertSorted_spec  (l : loc) (xs : list w64) (v : w64) :
   {{{ is_pkg_init dll ∗ own_list l xs ∗ ⌜ Sorted xs ⌝  }}}
