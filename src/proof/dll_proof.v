@@ -58,15 +58,6 @@ Proof.
   iFrame.
 Qed.
 
-Fixpoint Sorted (xs : list w64) :=
-  match xs with
-  | [] => True
-  | x :: xs => match xs with
-    | [] => True
-    | y :: _ => (uint.Z x < uint.Z y ∧ Sorted xs)
-    end
-  end.
-
 Lemma is_dlist_node_app fst last prev next xs ys :
   is_dlist_node fst last prev next (xs ++ ys)
   ⊣⊢
@@ -131,6 +122,56 @@ Proof.
   - by iExists x, xs'.
 Qed.
 
+Fixpoint Sorted (xs : list w64) :=
+  match xs with
+  | [] => True
+  | x :: xs => match xs with
+    | [] => True
+    | y :: _ => (uint.Z x ≤ uint.Z y ∧ Sorted xs)
+    end
+  end.
+
+Lemma Sorted_tail (x : w64) (xs : list w64) : Sorted (x :: xs) -> Sorted xs.
+Proof.
+  elim xs => [|x' [|y ys]]; [by done|by done|].
+  move => IH H.
+  simpl.
+  split.
+  - by move: H => [_ [H _]].
+  - apply IH.
+    move: H => [? [? ?]].
+    split; last by done.
+    lia.
+Qed.
+
+Lemma Sorted_snoc (xs : list w64) (y : w64) : Sorted xs -> (∀ x, x ∈ xs -> uint.Z x ≤ uint.Z y) -> Sorted(xs ++ [y]).
+Proof.
+  elim xs; [by done|].
+  move => a l IH Hsorted Hy //=.
+  move: IH Hy Hsorted.
+  case l => [|b l'] IH Hy Hsorted.
+  - split; last by auto.
+    apply Hy.
+    apply elem_of_cons.
+    by left.
+  - split.
+    + simpl in Hsorted.
+      by move: Hsorted => [Hab _].
+    + apply IH.
+      * by apply (Sorted_tail a).
+      * move => x Hx.
+        apply Hy.
+        by rewrite elem_of_cons; right.
+Qed.
+
+Lemma Sorted_insert a y (xs ys : list w64) :
+  Sorted (xs ++ y :: ys) ->
+  (∀ x, x ∈ xs -> uint.Z x ≤ uint.Z a) ->
+  uint.Z a ≤ uint.Z y ->
+  Sorted (xs ++ a :: y :: ys).
+Proof.
+Admitted.
+
 (* TODO: postcond should  intuitively denote xs = ys ++ y ++ z ++ zs and y < v < z with some side conditions for when they may be null*)
 Lemma t (l last : loc) (v : w64) (xs : list w64):
   {{{ is_pkg_init dll ∗ is_dlist_node l last null null xs ∗ ⌜Sorted xs⌝ }}}
@@ -171,7 +212,12 @@ Proof.
       by iApply is_dlist_node_null_nil in "Hdlist_zs".
     }
     iFrame.
-    admit.
+    iDestruct "HSorted" as "%HSorted".
+    rewrite app_nil_r in HSorted.
+    iPureIntro; split; first by auto.
+    apply Sorted_snoc; first by auto.
+    move => x Hx.
+    by move: (Hyv x Hx).
   - case zs => [|z zs'].
     + simpl.
       by iDestruct "Hdlist_zs" as "[-> ->]".
@@ -190,12 +236,22 @@ Proof.
               rewrite elem_of_app in Hy.
               case Hy => [Hy' | Hy'].
               ** by apply Hyv.
-              ** admit.
+              ** rewrite elem_of_cons elem_of_nil in Hy'.
+                 move: Hy' => [Hy' | Hfalse]; last by done.
+                 subst y.
+                 lia.
         -- iFrame.
-           admit.
+           iApply is_dlist_node_app.
+           iExists p, cur.
+           by iFrame.
       * iApply "HΦ".
-        admit.
-Admitted.
+        iExists ys, (z :: zs').
+        iFrame.
+        iDestruct "HSorted" as "%HSorted".
+        iPureIntro; split; first by auto.
+        apply Sorted_insert; [by done|by done|].
+        lia.
+Qed.
 
 Theorem insertSorted_spec  (l : loc) (xs : list w64) (v : w64) :
   {{{ is_pkg_init dll ∗ own_list l xs ∗ ⌜ Sorted xs ⌝  }}}
