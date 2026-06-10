@@ -60,15 +60,6 @@ func (n *Node) findLeastGreaterNode(v uint64) (*Node, *Node) {
 	return p, cur
 }
 
-// n must be not nil
-func (n *Node) insertNodeBefore(node *Node) {
-	p := n.prev
-	n.prev = node;
-	if p != nil {
-		p.next = node;
-	}
-}
-
 func (l *List) InsertSorted(v uint64) {
 	l.size++
 	if l.head == nil {
@@ -79,12 +70,13 @@ func (l *List) InsertSorted(v uint64) {
 	p, n := l.head.findLeastGreaterNode(v)
 	newNode := &Node{val: v, next: n, prev: p}
 	if n != nil {
-		n.insertNodeBefore(newNode)
-	}
-	if p == l.tail {
+		n.prev = newNode
+	} else {
 		l.tail = newNode
 	}
-	if n == l.head {
+	if p != nil {
+		p.next = newNode
+	} else {
 		l.head = newNode
 	}
 }
