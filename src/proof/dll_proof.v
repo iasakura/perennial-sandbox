@@ -333,9 +333,34 @@ Proof.
     wp_auto.
     wp_alloc new as "Hnew".
     wp_auto.
-    wp_if_join (
-      is_dlist_node new tl prev null (v :: zs)
-    )
+    wp_if_join (λ x,
+      ∃ new_tl,
+        newNode_ptr ↦ new ∗
+        l_ptr ↦ l ∗
+        is_dlist_node new new_tl prev null (v :: zs) ∗
+        l.[dll.List.t, "tail"] ↦ new_tl
+    )%I with "[newNode Hdlist_node Hnew Htail l n]".
+    + iExists new.
+      simpl.
+      iFrame.
+      iExists null.
+      iStructNamed "Hnew".
+      simpl.
+      iSplitL "".
+      { admit. }
+      iFrame.
+      iFrameNamed.
+      iPoseProof (is_dlist_node_null_nil with "Hdlist_node") as "->".
+      by simpl.
+    + iStructNamed "Hnew"; simpl.
+      
+
+
+
+
+
+
+
     wp_bind (if: _ then do: _ else do: _)%E.
     wp_bind_inv.
     case E: (bool_decide (node = null)).
