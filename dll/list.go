@@ -49,3 +49,34 @@ func (l *List) PushFront(v uint64) {
 func (l *List) Len() uint64 {
 	return l.size
 }
+
+func (n *Node) findLeastGreaterNode(v uint64) (*Node, *Node) {
+	var p *Node
+	cur := n
+	for cur != nil && cur.val < v {
+		p = cur
+		cur = cur.next
+	}
+	return p, cur
+}
+
+func (l *List) InsertSorted(v uint64) {
+	l.size++
+	if l.head == nil {
+		l.head = &Node{val: v, next: nil, prev: nil}
+		l.tail = l.head
+		return
+	}
+	p, n := l.head.findLeastGreaterNode(v)
+	newNode := &Node{val: v, next: n, prev: p}
+	if n != nil {
+		n.prev = newNode
+	} else {
+		l.tail = newNode
+	}
+	if p != nil {
+		p.next = newNode
+	} else {
+		l.head = newNode
+	}
+}
