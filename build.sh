@@ -1,24 +1,26 @@
 #!/usr/bin/env bash
 # Build pipeline for this perennial-cli sandbox.
 #
-#   Go を書く  →  goose で Rocq に翻訳  →  make で証明チェック
+#   write Go  →  translate to Rocq with goose  →  check proofs with make
 #
 # Usage:
-#   ./build.sh          # 全部（go build → goose 翻訳 → make）
-#   ./build.sh go       # Go のビルド(型チェック)だけ
-#   ./build.sh goose    # goose 翻訳だけ（go build もする）
-#   ./build.sh make     # 翻訳済み前提で make（証明チェック）だけ
+#   ./build.sh          # everything (go build -> goose -> make)
+#   ./build.sh go       # Go build (type check) only
+#   ./build.sh goose    # goose translation (also runs go build)
+#   ./build.sh make     # make (proof check) only, assuming translation is done
 #
-# なぜこの手順が要るか（ハマりどころ）:
-#  - システム go は 1.25 だが perennial は go 1.26 を要求 → GOTOOLCHAIN=go1.26.0 を前置
-#  - go.mod に goose/proofgen が tool 登録されてない → `make` の自動 goose が動かないので
-#    perennial 同梱の goose を `--local` で直接呼ぶ（pin と同一バージョンで安全）
-#  - 翻訳は済ませたと make に伝えるため .goose-output を touch（さもないと make が
-#    動かない goose ステップに突っ込んで死ぬ）
-#  - proofgen がたまに不正な src/generatedproof/_ を吐くので毎回掃除
+# Why these steps exist (gotchas):
+#  - the system go is 1.25 but perennial requires go 1.26
+#    → GOTOOLCHAIN=go1.26.0 is forced
+#  - goose/proofgen are not registered as tools in go.mod, so make's automatic
+#    goose step does not work; we call the goose bundled with the perennial
+#    checkout via --local (same version as the opam pin, so they stay in sync)
+#  - .goose-output is touched to tell make the translation is up to date
+#    (otherwise make runs the broken goose step and dies)
+#  - proofgen sometimes emits a bogus src/generatedproof/_ directory; clean it
 set -euo pipefail
 
-# --- 設定（環境が変わったらここだけ直す） ---
+# --- configuration (adjust here when the environment changes) ---
 export GOTOOLCHAIN=go1.26.0
 PERENNIAL="${PERENNIAL:-/home/ia/ghq/github.com/mit-pdos/perennial}"
 GOOSE_SRC="$PERENNIAL/goose"
@@ -28,23 +30,23 @@ cd "$(dirname "$0")"
 step="${1:-all}"
 
 do_go() {
-  echo ">>> go build (型チェック)"
+  echo ">>> go build (type check)"
   go build ./...
   echo "    OK"
 }
 
 do_goose() {
-  echo ">>> goose 翻訳 (Go -> Rocq, perennial 同梱版を --local で使用)"
+  echo ">>> goose translation (Go -> Rocq, using perennial's bundled goose via --local)"
   go tool perennial-cli goose --local "$GOOSE_SRC"
-  rm -rf src/generatedproof/_   # proofgen のゴミ掃除
-  echo "    OK -> src/code/... と src/generatedproof/... を更新"
+  rm -rf src/generatedproof/_   # clean up proofgen artifacts
+  echo "    OK -> updated src/code/... and src/generatedproof/..."
 }
 
 do_make() {
-  echo ">>> make (.v を .vo にコンパイル = 型検査 + 証明チェック)"
-  touch .goose-output          # 翻訳済みと make に伝える
+  echo ">>> make (compile .v to .vo = type check + proof check)"
+  touch .goose-output          # tell make the translation is done
   make
-  echo "    OK -> 全 .vo 生成"
+  echo "    OK -> all .vo built"
 }
 
 case "$step" in
