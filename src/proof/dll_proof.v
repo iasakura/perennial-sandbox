@@ -103,6 +103,21 @@ Proof.
     by iDestruct "Hl" as "%Hl".
 Qed.
 
+Lemma is_dlist_node_last_null_nil fst prev next xs :
+  is_dlist_node fst null prev next xs -∗ ⌜xs = []⌝.
+Proof.
+  move: fst prev next.
+  elim xs => [|x xs' IH] fst prev next //=.
+  - by auto.
+  - iIntros "(%n & H)".
+    iNamed "H".
+    iPoseProof (IH with "His_dlist") as "->".
+    simpl.
+    iDestruct "His_dlist" as "[-> ->]".
+    iDestruct "Hl" as "%H".
+    by done.
+Qed.
+
 Lemma is_dlist_node_not_null_cons fst last prev xs :
   fst ≠ null ->
   is_dlist_node fst last prev null xs -∗
@@ -114,6 +129,20 @@ Proof.
   - simpl.
     by iDestruct "H" as "[-> ->]".
   - by iExists x, xs'.
+Qed.
+
+Lemma is_dlist_node_last_not_null_snoc fst last next xs :
+  last ≠ null ->
+  is_dlist_node fst last null next xs -∗
+  ∃x xs', ⌜xs = xs' ++ [x]⌝.
+Proof.
+  move => H.
+  iIntros "H".
+  elim xs using rev_ind.
+  - simpl.
+    by iDestruct "H" as "[_ ->]".
+  - move => x l IH.
+    by iExists x, l.
 Qed.
 
 Inductive Sorted : list w64 -> Prop :=
@@ -333,49 +362,104 @@ Proof.
     wp_auto.
     wp_alloc new as "Hnew".
     wp_auto.
+    iAssert (⌜new ≠ null⌝)%I with "[Hnew]" as "%Hnew".
+    {
+      by iApply typed_pointsto_not_null in "Hnew".
+    }
     wp_if_join (λ x,
+      ⌜x=execute_val⌝ ∗
       ∃ new_tl,
         newNode_ptr ↦ new ∗
         l_ptr ↦ l ∗
         is_dlist_node new new_tl prev null (v :: zs) ∗
         l.[dll.List.t, "tail"] ↦ new_tl
     )%I with "[newNode Hdlist_node Hnew Htail l n]".
-    + iExists new.
+    {
+      iSplitR; first by done.
+      iExists new.
       simpl.
       iFrame.
       iExists null.
       iStructNamed "Hnew".
       simpl.
-      iSplitL "".
-      { admit. }
+      iSplitL ""; first by done.
       iFrame.
       iFrameNamed.
       iPoseProof (is_dlist_node_null_nil with "Hdlist_node") as "->".
       by simpl.
-    + iStructNamed "Hnew"; simpl.
-      
-
-
-
-
-
-
-
-    wp_bind (if: _ then do: _ else do: _)%E.
-    wp_bind_inv.
-    case E: (bool_decide (node = null)).
-    + wp_pures.
-
-    +
-
-
-
-
-
-
-Admitted.
-
-Print is_dlist_node.
+    }
+    {
+      iStructNamed "Hnew"; simpl.
+      iPoseProof (is_dlist_node_not_null_cons with "Hdlist_node") as "(%x & %xs & ->)"; first by auto.
+      simpl; iDestruct "Hdlist_node" as "(%n' & _ & H)".
+      iNamed "H".
+      wp_auto.
+      iSplitR; first by done.
+      iExists tl.
+      iFrame.
+      iSplitL; by done.
+    }
+    iIntros (v') "(-> & %new_tl & HnewNode & Hl_ptr & Hdlist_new & Htail)".
+    wp_auto.
+    wp_if_join (λ x,
+      ⌜x=execute_val⌝ ∗
+      ∃ new_hd,
+        newNode_ptr ↦ new ∗
+        l_ptr ↦ l ∗
+        is_dlist_node new_hd new_tl null null (ys ++ v :: zs) ∗
+        l.[dll.List.t, "head"] ↦ new_hd
+    )%I with "[Hdlist_hd Hdlist_new HnewNode Hl_ptr p Hhead]".
+    {
+      simpl.
+      iDestruct "Hdlist_new" as "(%n' & H)".
+      iNamed "H".
+      iSplitR; first by done.
+      iExists new.
+      iFrame.
+      iApply is_dlist_node_app.
+      iExists null, new.
+      simpl.
+      iFrame.
+      iPoseProof (is_dlist_node_last_null_nil with "[Hdlist_hd]") as "->"; first by done.
+      by done.
+    }
+    {
+      iPoseProof (is_dlist_node_last_not_null_snoc with "[$Hdlist_hd]") as "(%y & %ys' & ->)"; first by auto.
+      iPoseProof (is_dlist_node_app with "Hdlist_hd") as "(%mid_last & %mid_fst & Hys' & Hy)".
+      simpl.
+      iDestruct "Hy" as "(%n' & Hy)".
+      iNamed "Hy".
+      iDestruct "His_dlist" as "[-> ->]".
+      iDestruct "Hdlist_new" as "(%n1 & Hnew)".
+      iNamedSuffix "Hnew" "1".
+      iDestruct "Hl1" as "%Hl1".
+      wp_auto.
+      iSplitR; first by auto.
+      iExists hd.
+      rewrite is_dlist_node_app.
+      iSplitL "HnewNode"; first by iFrame.
+      iSplitL "Hl_ptr"; first by iFrame.
+      iSplitR "Hhead"; last by iFrame.
+      iExists mid_fst, new.
+      rewrite is_dlist_node_app.
+      simpl.
+      iSplitR "Hval1 Hnext1 Hprev1 His_dlist1".
+      { iExists mid_last, mid_fst.
+        by iFrame. }
+      iExists n1.
+      by iFrame.
+    }
+    iIntros (v') "[-> (%new_hd & HnewNode & Hl & H & Hhead)]".
+    wp_auto.
+    iApply "HΦ".
+    iExists ys, zs.
+    repeat (iSplitR; first by done).
+    iFrame.
+    have ->: w64_word_instance .(word.add) (W64 (length (ys ++ zs))) (W64 1) = W64 (length (ys ++ v :: zs)); last by done.
+    rewrite !length_app.
+    simpl.
+    word.
+Qed.
 
 End proof.
 
