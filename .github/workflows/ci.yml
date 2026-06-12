@@ -1,15 +1,17 @@
-# CI: go build → goose 翻訳 → rocq compile (証明チェック)
+# CI: go build → goose translation → rocq compile (proof check)
 #
-# サプライチェーン方針:
-#   - action は GitHub 公式 (actions/*) のみ。サードパーティ action は使わない。
-#   - すべて commit SHA で固定 (タグは動かせるが SHA は動かせない)。
-#     コメントの vX.Y.Z は人間用のメモ。更新時は新タグの SHA を取り直すこと:
+# Supply-chain policy:
+#   - Official GitHub actions (actions/*) only; no third-party actions.
+#   - Everything is pinned by commit SHA (tags can be moved, SHAs cannot).
+#     The vX.Y.Z comments are notes for humans. To update, resolve the new
+#     tag to its commit SHA:
 #       git ls-remote https://github.com/actions/checkout 'refs/tags/vX.Y.Z^{}'
-#   - opam 依存は perennial-sandbox.opam の pin-depends で全部 git SHA 固定済み。
-#   - perennial の checkout も opam pin と同一 SHA を fetch する。
+#   - opam dependencies are all pinned to git SHAs via pin-depends in
+#     perennial-sandbox.opam.
+#   - The perennial checkout is fetched at the same SHA as the opam pin.
 #
-# 初回 (キャッシュなし) は Perennial のビルドで数時間かかる。2回目以降は
-# _opam キャッシュが効いて goose + 証明チェックだけになる。
+# The first run (no cache) builds Perennial and takes a few hours. Later runs
+# hit the _opam cache and only do goose + proof checking.
 
 name: CI
 
@@ -25,7 +27,7 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  # perennial-sandbox.opam の pin-depends と同じ SHA に保つこと
+  # Keep in sync with the perennial pin in perennial-sandbox.opam
   PERENNIAL_COMMIT: f884a505d89d3f6740f4baec515602494a9bd4cc
 
 jobs:
@@ -65,7 +67,7 @@ jobs:
           fi
           opam install ./perennial-sandbox.opam --deps-only -y
 
-      # 途中で落ちても opam のビルド結果は保存して次回再開できるようにする
+      # Save even on failure so the multi-hour first build can resume next run
       - name: Save opam cache
         if: always() && steps.opam-cache.outputs.cache-hit != 'true'
         uses: actions/cache/save@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
