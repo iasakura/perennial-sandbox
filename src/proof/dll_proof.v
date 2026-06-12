@@ -208,7 +208,7 @@ Proof.
   lia.
 Qed.
 
-Lemma Sorted_insert a y (xs ys : list w64) :
+Lemma W64Sorted_insert a y (xs ys : list w64) :
   W64Sorted (xs ++ y :: ys) ->
   (∀ x, x ∈ xs -> uint.Z x ≤ uint.Z a) ->
   uint.Z a ≤ uint.Z y ->
@@ -299,7 +299,7 @@ Proof.
         iFrame.
         iDestruct "HSorted" as "%HSorted".
         iPureIntro; split; first by auto.
-        apply Sorted_insert; [by done|by done|].
+        apply W64Sorted_insert; [by done|by done|].
         lia.
 Qed.
 
