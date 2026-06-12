@@ -1,26 +1,30 @@
-(* Proofs about the doubly-linked list in dll/list.go.
-   Kept in its own package `dll` so the generated struct names (List/Node)
-   resolve cleanly — the `example` package identifier collides with Coq's
-   module resolution and made `example.List.t` unreferenceable from here.
-
-   Following the elimination_stack proof style: describe the List struct with
-   per-field points-to via the `l.[Struct.t, "field"]` notation. own_list tracks
-   the size field against a logical list; the head/tail node chain is held
-   abstractly (a full prev/next invariant is left as a heavier next step). *)
+(* Correctness proof of the sorted doubly-linked list implemented in Go
+   (dll/list.go), verified against its goose translation. The main result is
+   insertSorted_spec: InsertSorted on a sorted list inserts the value while
+   keeping the list sorted. *)
 From New.proof Require Import proof_prelude.
+From New.proof Require Import utils.
 From New.code.github_com.iasakura.perennial_sandbox Require Import dll.
 From New.generatedproof.github_com.iasakura.perennial_sandbox Require Import dll.
+Require Import stdpp.sorting.
 
 Section proof.
 Context `{hG: heapGS Σ, !ffi_semantics _ _}.
 Context {sem : go.Semantics} {package_sem : dll.Assumptions}.
 Collection W := sem + package_sem.
 Set Default Proof Using "W".
+Open Scope Z.
 
 #[global] Instance : IsPkgInit (iProp Σ) dll := define_is_pkg_init True%I.
 #[global] Instance : GetIsPkgInitWf (iProp Σ) dll := build_get_is_pkg_init_wf.
 
-(* l points to a dlist node whose prev pointer is p and the last next pointer is n *)
+(**
+  The invariant of list nodes.
+  [l] points to a dlist node and [last] is a pointer in the list.
+  The elements between [l] and [last] including themselves are maintained by this invariant.
+  The parameters [prev] is the value of the previous pointer of [l] and [next] is the next pointer of [last].
+  They are used to show lemma like [is_dlist_node_app].
+*)
 Fixpoint is_dlist_node (l last prev next : loc) (xs : list w64) : iProp Σ :=
   match xs with
   (* for ensuring that traversal is immediately finished when xs = [] *)
@@ -138,119 +142,93 @@ Lemma is_dlist_node_last_not_null_snoc fst last next xs :
 Proof.
   move => H.
   iIntros "H".
-  elim xs using rev_ind.
+  case/snocP: xs => [|xs' x].
   - simpl.
     by iDestruct "H" as "[_ ->]".
-  - move => x l IH.
-    by iExists x, l.
+  - by iExists x, xs'.
 Qed.
 
-Inductive Sorted : list w64 -> Prop :=
-  | Sorted_nil : Sorted []
-  | Sorted_one w : Sorted [w]
-  | Sorted_cons a b xs :
-    Sorted (b :: xs) ->
-    uint.Z a ≤ uint.Z b ->
-    Sorted (a :: b :: xs).
+Notation W64Sorted := (StronglySorted (λ x y, uint.Z x ≤ uint.Z y)).
 
-Lemma Sorted_tail (x : w64) (xs : list w64) : Sorted (x :: xs) -> Sorted xs.
+Section Sorted.
+(* Auxiliary lemmas for W64Sorted. *)
+
+Lemma StronglySorted_one {A : Type} (x : A) P : StronglySorted P [x].
 Proof.
-  elim xs => [|x' [|y ys]]; [by constructor|by constructor|].
-  move => IH H.
-  by inv H.
+  repeat constructor.
 Qed.
 
-Lemma Sorted_snoc (xs : list w64) (y : w64) : Sorted xs -> (∀ x, x ∈ xs -> uint.Z x ≤ uint.Z y) -> Sorted(xs ++ [y]).
+Lemma W64Sorted_snoc (xs : list w64) (y : w64) : W64Sorted xs -> (∀ x, x ∈ xs -> uint.Z x ≤ uint.Z y)%Z -> W64Sorted (xs ++ [y]).
 Proof.
-  elim xs; [by constructor|].
-  move => a l IH Hsorted Hy //=.
-  move: IH Hy Hsorted.
-  case l => [|b l'] IH Hy Hsorted.
-  - apply Sorted_cons.
-    + apply IH; first by apply Sorted_nil.
-      move => x Hx.
-      rewrite elem_of_nil in Hx.
-      case Hx.
-    + apply Hy.
-      rewrite elem_of_cons.
-      left.
-      done.
-  - simpl.
-    apply Sorted_cons.
-    + apply IH.
-      * by apply (Sorted_tail a).
-      * move => x Hx.
-        apply Hy.
-        by rewrite elem_of_cons; right.
-    + by inv Hsorted.
+  move => H Hy.
+  rewrite StronglySorted_app.
+  split.
+  + move => x1 x2.
+    rewrite elem_of_cons elem_of_nil.
+    move => Hx1 [-> | []].
+    by auto.
+  + split; first by done.
+    apply StronglySorted_one.
 Qed.
 
-Lemma Sorted_app (xs ys : list w64) (x y : w64) :
-  Sorted (xs ++ [x]) ->
-  Sorted (y :: ys) ->
-  uint.Z x ≤ uint.Z y ->
-  Sorted (xs ++ x :: y :: ys).
+Lemma W64Sorted_app (xs ys : list w64) (x y : w64) :
+  W64Sorted (xs ++ [x]) ->
+  W64Sorted (y :: ys) ->
+  (uint.Z x ≤ uint.Z y)%Z ->
+  W64Sorted (xs ++ x :: y :: ys).
 Proof.
-  elim xs => [|a xs'] //=.
-  - move => Hxs Hys Hxy.
-    by apply Sorted_cons.
-  - case xs' => [|b xs''] //=.
-    + move => IH Hxs Hys Hxy.
-      apply Sorted_cons.
-      * by apply IH; eauto using Sorted_one.
-      * by inv Hxs.
-    + move => IH Hxs Hys Hxy.
-      inv Hxs.
-      apply Sorted_cons; by eauto using IH.
-Qed.
+  move => Hxs Hys Hxy.
+  have ->: xs ++ x :: y :: ys = (xs ++ [x]) ++ y :: ys by rewrite -app_assoc.
+  rewrite StronglySorted_app.
+  split_and; [|done..].
 
-Lemma Sorted_app_left (xs ys : list w64) :
-  Sorted (xs ++ ys) ->
-  Sorted xs.
-Proof.
-  elim: xs => [|x xs Hxs] H.
-  - apply Sorted_nil.
-  - move: xs Hxs H => [|x' xs] Hxs H.
-    + apply Sorted_one.
-    + inv H.
-      constructor.
-      * by apply Hxs.
-      * auto.
-Qed.
+  rewrite StronglySorted_app in Hxs.
+  rewrite StronglySorted_cons in Hys.
+  move: Hys Hxs => [Hy Hys] [Hx [Hxs _]].
+  rewrite Forall_forall in Hy Hx.
 
-Lemma Sorted_app_right (xs ys : list w64) :
-  Sorted (xs ++ ys) ->
-  Sorted ys.
-Proof.
-  elim: xs => [|x xs Hxs] H.
-  - by done.
-  - move: xs Hxs H => [|x' xs] Hxs H.
-    + by eauto using Sorted_tail.
-    + inv H.
-      by auto.
-Qed.
+  move => x1 x2.
 
+  rewrite elem_of_app !elem_of_cons elem_of_nil.
+  move => Hx1 Hx2.
+
+  have Hx1x : uint.Z x1 ≤ uint.Z x.
+  {
+    move: Hx1 => [Hx1 | [-> | []]].
+    - apply Hx; first by auto.
+      by rewrite elem_of_cons; left.
+    - lia.
+  }
+  have Hyx2 : uint.Z y ≤ uint.Z x2.
+  {
+    move: Hx2 => [-> | Hx2].
+    - lia.
+    - by apply Hy.
+  }
+  lia.
+Qed.
 
 Lemma Sorted_insert a y (xs ys : list w64) :
-  Sorted (xs ++ y :: ys) ->
+  W64Sorted (xs ++ y :: ys) ->
   (∀ x, x ∈ xs -> uint.Z x ≤ uint.Z a) ->
   uint.Z a ≤ uint.Z y ->
-  Sorted (xs ++ a :: y :: ys).
+  W64Sorted (xs ++ a :: y :: ys).
 Proof.
   move => Hxsys Hxsa Hay.
-  move: (Sorted_app_left _ _ Hxsys) => Hxs.
-  apply Sorted_app.
-  - by apply Sorted_snoc.
-  - by eauto using Sorted_app_right.
+  move: (StronglySorted_app_1_l _ _ _ Hxsys) => Hxs.
+  apply W64Sorted_app.
+  - by apply W64Sorted_snoc.
+  - by eauto using StronglySorted_app_1_r.
   - by auto.
 Qed.
 
-(* TODO: postcond should  intuitively denote xs = ys ++ y ++ z ++ zs and y < v < z with some side conditions for when they may be null*)
-Lemma t (l last : loc) (v : w64) (xs : list w64):
-  {{{ is_pkg_init dll ∗ is_dlist_node l last null null xs ∗ ⌜Sorted xs⌝ }}}
+End Sorted.
+
+Lemma findLeastGreaterNode_spec (l last : loc) (v : w64) (xs : list w64):
+  {{{ is_pkg_init dll ∗ is_dlist_node l last null null xs ∗ ⌜W64Sorted xs⌝ }}}
     l @! (go.PointerType dll.Node) @! "findLeastGreaterNode" (# v)
   {{{ prev node, RET (#prev, #node); ∃ ys zs,
-        ⌜xs = ys ++ zs ∧ Sorted(ys ++ v :: zs)⌝ ∗
+        ⌜xs = ys ++ zs ∧ W64Sorted (ys ++ v :: zs)⌝ ∗
         is_dlist_node l prev null node ys ∗
         is_dlist_node node last prev null zs }}}.
 Proof.
@@ -276,7 +254,6 @@ Proof.
   wp_for.
   iDestruct "IH" as "(%ys & %zs & %cur & %p & [-> %Hyv] & Hcur & Hp & Hdlist_ys & Hdlist_zs)".
   wp_auto.
-  (* rewrite -bool_decide_not. *)
   wp_if_destruct.
   - iApply "HΦ".
     iExists ys, zs.
@@ -288,7 +265,7 @@ Proof.
     iDestruct "HSorted" as "%HSorted".
     rewrite app_nil_r in HSorted.
     iPureIntro; split; first by auto.
-    apply Sorted_snoc; first by auto.
+    apply W64Sorted_snoc; first by auto.
     move => x Hx.
     by move: (Hyv x Hx).
   - case zs => [|z zs'].
@@ -327,9 +304,9 @@ Proof.
 Qed.
 
 Theorem insertSorted_spec  (l : loc) (xs : list w64) (v : w64) :
-  {{{ is_pkg_init dll ∗ own_list l xs ∗ ⌜ Sorted xs ⌝  }}}
+  {{{ is_pkg_init dll ∗ own_list l xs ∗ ⌜ W64Sorted xs ⌝  }}}
     l @! (go.PointerType dll.List) @! "InsertSorted" #v
-  {{{ RET #(); ∃ ys zs, ⌜xs = ys ++ zs ⌝ ∗ ⌜Sorted (ys ++ v :: zs)⌝ ∗ own_list l (ys ++ v :: zs)}}}.
+  {{{ RET #(); ∃ ys zs, ⌜xs = ys ++ zs ⌝ ∗ ⌜W64Sorted (ys ++ v :: zs)⌝ ∗ own_list l (ys ++ v :: zs)}}}.
 Proof.
   wp_start as "[Hown %HSorted]".
   iNamed "Hown".
@@ -347,7 +324,7 @@ Proof.
     }
     iExists [], [].
     iSplitR; [by done|].
-    iSplitR; [by iPureIntro; apply Sorted_one|].
+    iSplitR; [by iPureIntro; apply StronglySorted_one|].
     rewrite /own_list.
     iExists l', l'.
     simpl.
@@ -357,7 +334,7 @@ Proof.
     simpl.
     iFrame.
     by done.
-  - wp_apply (t with "[$His_dlist]"); first by done.
+  - wp_apply (findLeastGreaterNode_spec with "[$His_dlist]"); first by done.
     iIntros (prev node) "(%ys & %zs & (-> & %Hsorted') & Hdlist_hd & Hdlist_node)".
     wp_auto.
     wp_alloc new as "Hnew".
